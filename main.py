@@ -218,9 +218,10 @@ def groq_summarize(articles_by_category):
             f"- [{a['source']}] {a['title']}\n  {a['summary']}"
             for a in articles[:MAX_ARTICLES_PER_CATEGORY]
         )
-        prompt = f"""以下のニュース記事を日本語で要約してください。
+        prompt = f"""以下のニュース記事を必ず日本語で要約してください。
+英語の記事も全て日本語に翻訳して要約すること。
 各記事について以下の形式で出力してください：
-- タイトル（元のタイトルをそのまま使用）
+- タイトル：日本語に翻訳したタイトル
 - 要約：1〜2文で簡潔に（です・ます調）
 
 カテゴリ: {category}
