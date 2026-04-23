@@ -109,6 +109,8 @@ def fetch_google_calendar():
             )
             try:
                 res = requests.get(url, timeout=10)
+                log.info(f"Calendar API response {cal_id}: status={res.status_code}")
+                log.info(f"Calendar API response body: {res.text[:500]}")
                 res.raise_for_status()
                 items = res.json().get("items", [])
                 for item in items:
