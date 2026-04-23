@@ -26,6 +26,10 @@ NOW = datetime.now(JST)
 TODAY_STR = NOW.strftime("%Y年%-m月%-d日（%a）").replace(
     "Mon", "月").replace("Tue", "火").replace("Wed", "水").replace(
     "Thu", "木").replace("Fri", "金").replace("Sat", "土").replace("Sun", "日")
+TOMORROW = NOW + timedelta(days=1)
+TOMORROW_STR = TOMORROW.strftime("%Y年%-m月%-d日（%a）").replace(
+    "Mon", "月").replace("Tue", "火").replace("Wed", "水").replace(
+    "Thu", "木").replace("Fri", "金").replace("Sat", "土").replace("Sun", "日")
 
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
@@ -83,50 +87,53 @@ RIKA_KEYWORDS = [
 
 # ─── Googleカレンダー取得 ────────────────────────────────
 def fetch_google_calendar():
-    """本日の予定をGoogleカレンダーから取得（APIキー方式）"""
+    """今日・明日の予定をGoogleカレンダーから取得（APIキー方式）"""
     if not GCAL_API_KEY or not GCAL_IDS[0]:
         log.warning("GCAL設定なし。カレンダーをスキップします。")
-        return []
+        return {"today": [], "tomorrow": []}
 
-    today_start = NOW.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    today_end   = NOW.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+    def _fetch_day(day: datetime) -> list:
+        day_start = day.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        day_end   = day.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+        events = []
+        for cal_id in GCAL_IDS:
+            cal_id = cal_id.strip()
+            if not cal_id:
+                continue
+            url = (
+                f"https://www.googleapis.com/calendar/v3/calendars/{requests.utils.quote(cal_id, safe='')}"
+                f"/events?key={GCAL_API_KEY}"
+                f"&timeMin={requests.utils.quote(day_start)}"
+                f"&timeMax={requests.utils.quote(day_end)}"
+                f"&singleEvents=true&orderBy=startTime"
+            )
+            try:
+                res = requests.get(url, timeout=10)
+                res.raise_for_status()
+                items = res.json().get("items", [])
+                for item in items:
+                    start = item.get("start", {})
+                    time_str = start.get("dateTime", start.get("date", ""))
+                    if "T" in time_str:
+                        dt = datetime.fromisoformat(time_str).astimezone(JST)
+                        time_label = dt.strftime("%-H:%M")
+                    else:
+                        time_label = "終日"
+                    events.append({
+                        "title": item.get("summary", "（タイトルなし）"),
+                        "time": time_label,
+                        "calendar": cal_id,
+                    })
+                log.info(f"カレンダー {cal_id} ({day.date()}): {len(items)}件取得")
+            except Exception as e:
+                log.error(f"カレンダー取得エラー {cal_id}: {e}")
+        events.sort(key=lambda x: ("99:99" if x["time"] == "終日" else x["time"]))
+        return events
 
-    events = []
-    for cal_id in GCAL_IDS:
-        cal_id = cal_id.strip()
-        if not cal_id:
-            continue
-        url = (
-            f"https://www.googleapis.com/calendar/v3/calendars/{requests.utils.quote(cal_id, safe='')}"
-            f"/events?key={GCAL_API_KEY}"
-            f"&timeMin={requests.utils.quote(today_start)}"
-            f"&timeMax={requests.utils.quote(today_end)}"
-            f"&singleEvents=true&orderBy=startTime"
-        )
-        try:
-            res = requests.get(url, timeout=10)
-            res.raise_for_status()
-            items = res.json().get("items", [])
-            for item in items:
-                start = item.get("start", {})
-                time_str = start.get("dateTime", start.get("date", ""))
-                if "T" in time_str:
-                    dt = datetime.fromisoformat(time_str).astimezone(JST)
-                    time_label = dt.strftime("%-H:%M")
-                else:
-                    time_label = "終日"
-                events.append({
-                    "title": item.get("summary", "（タイトルなし）"),
-                    "time": time_label,
-                    "calendar": cal_id,
-                })
-            log.info(f"カレンダー {cal_id}: {len(items)}件取得")
-        except Exception as e:
-            log.error(f"カレンダー取得エラー {cal_id}: {e}")
-
-    # 時刻順ソート（終日は末尾）
-    events.sort(key=lambda x: ("99:99" if x["time"] == "終日" else x["time"]))
-    return events
+    return {
+        "today":    _fetch_day(NOW),
+        "tomorrow": _fetch_day(TOMORROW),
+    }
 
 
 # ─── RSS収集 ────────────────────────────────────────────
@@ -272,8 +279,18 @@ def build_slack_message(events, summarized):
 
     # 📅 今日の予定
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*📅 今日の予定*"}})
-    if events:
-        event_lines = "\n".join(f"• `{e['time']}` {e['title']}" for e in events)
+    today_events = events.get("today", [])
+    if today_events:
+        event_lines = "\n".join(f"• `{e['time']}` {e['title']}" for e in today_events)
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": event_lines}})
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "予定なし"}})
+
+    # 📅 明日の予定
+    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*📅 明日の予定（{TOMORROW_STR}）*"}})
+    tomorrow_events = events.get("tomorrow", [])
+    if tomorrow_events:
+        event_lines = "\n".join(f"• `{e['time']}` {e['title']}" for e in tomorrow_events)
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": event_lines}})
     else:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "予定なし"}})
@@ -332,7 +349,7 @@ def main():
 
     # 1. カレンダー取得
     events = fetch_google_calendar()
-    log.info(f"予定: {len(events)}件")
+    log.info(f"予定: 今日{len(events['today'])}件 / 明日{len(events['tomorrow'])}件")
 
     # 2. RSS収集
     articles = collect_all_articles()
