@@ -258,10 +258,21 @@ def groq_summarize(articles_by_category):
             if match:
                 data = json.loads(match.group())
                 # 元のリンクを付与
-                link_map = {a["title"]: a["link"] for a in articles}
-                for item in data.get("items", []):
-                    item["link"] = link_map.get(item["title"], "")
-                results[category] = data.get("items", [])
+                items_list = data.get("items", [])
+                for item in items_list:
+                    matched = False
+                    for a in articles:
+                        if item.get("title", "") in a["title"] or a["title"] in item.get("title", ""):
+                            item["link"] = a["link"]
+                            item["source"] = a.get("source", item.get("source", ""))
+                            matched = True
+                            break
+                    if not matched and articles:
+                        idx = items_list.index(item)
+                        if idx < len(articles):
+                            item["link"] = articles[idx]["link"]
+                            item["source"] = articles[idx].get("source", "")
+                results[category] = items_list
             else:
                 results[category] = [{"title": a["title"], "summary": a["summary"], "link": a["link"], "source": a["source"]} for a in articles[:MAX_ARTICLES_PER_CATEGORY]]
         except Exception as e:
